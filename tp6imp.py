@@ -1,139 +1,78 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.linalg import solve
 
 # Parámetros físicos
 Lx, Ly = 10e-3, 1e-3  # Tamaño del dominio (m)
-Ny, Nx = 10, 100      # Número de nodos (y,x)
-dx, dy = Lx/Nx, Ly/Ny # Tamaño de celda
+Nx, Ny = 100, 10      # Número de nodos (y, x)
+dx, dy = Lx / Nx, Ly / Ny  # Tamaño de celda
 alpha = 1.14e-6       # Difusividad térmica (m^2/s)
-L = 334000            # Calor latente de fusión (J/kg)
-rho = 917             # Densidad del hielo (kg/m³)
-cp = 2100             # Calor específico del hielo (J/kg·K)
 
 # Parámetros temporales
-dt = 0.5 * min(dx**2, dy**2)/(2*alpha) * 0.5  # Condición de estabilidad
-Nt = int(100/dt)     # Número de pasos de tiempo
+dt = 0.5 * min(dx**2, dy**2) / (2 * alpha) * 0.5  # Condición de estabilidad
+Nt = int(20 / dt)      # Número de pasos de tiempo
 
 # Temperaturas características
-Tf = 0.0    # Temperatura de fusión (°C)
-Tliq = 0.05 # Temperatura de liquidus (°C)
+T_inicial = -10.0      # Temperatura inicial (en toda la placa)
+T_derecha_max = 75.0   # Temperatura máxima en el borde derecho
 
-def inicializar_temperatura(Nx, Ny):
-    """Inicializa el campo de temperatura con un gradiente suave."""
-    T = -10 + 10 * np.tanh(np.linspace(-5, 5, Nx))  # Rango ajustable
-    return T.reshape(1, Nx).repeat(Ny, axis=0)
+# Inicialización del campo de temperatura
+def inicializar_temperatura(Nx, Ny, T_inicial):
+    return np.full((Ny, Nx), T_inicial)
 
-def matriz_coeficientes(Nx, Ny, dx, dy, alpha):
-    """Genera la matriz de coeficientes para el esquema implícito."""
-    A = np.zeros((Ny*Nx, Ny*Nx))
+# Cálculo del Laplaciano con stencil
+def calcular_laplaciano(T, dx, dy):
+    Ny, Nx = T.shape
+    laplaciano = np.zeros_like(T)
+    for i in range(1, Ny - 1):
+        for j in range(1, Nx - 1):
+            laplaciano[i, j] = (
+                (T[i+1, j] - 2*T[i, j] + T[i-1, j]) / dy**2 +  # Derivada segunda en y
+                (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2    # Derivada segunda en x
+            )
+    return laplaciano
 
-    # Llenamos la matriz con los coeficientes
-    for i in range(Ny):
-        for j in range(Nx):
-            index = i * Nx + j
-            if i > 0:
-                A[index, index - Nx] = alpha / dy**2  # Arriba
-            if i < Ny - 1:
-                A[index, index + Nx] = alpha / dy**2  # Abajo
-            if j > 0:
-                A[index, index - 1] = alpha / dx**2  # Izquierda
-            if j < Nx - 1:
-                A[index, index + 1] = alpha / dx**2  # Derecha
-            A[index, index] = -2 * alpha * (1 / dx**2 + 1 / dy**2)  # Coeficiente central
-
-    return A
-
-def actualizar_temperatura(T, T_old, phi, phi_old, Nt, dt, dx, dy, A):
-    """Actualiza el campo de temperatura con el método implícito."""
-    # Computar el Laplaciano
-    lap_T = (np.roll(T_old, -1, axis=0) - 2*T_old + np.roll(T_old, 1, axis=0)) / dy**2 + \
-            (np.roll(T_old, -1, axis=1) - 2*T_old + np.roll(T_old, 1, axis=1)) / dx**2
-    
-    dphi_dt = np.where((Tf <= T_old) & (T_old <= Tliq),
-                        (T_old - Tf) / (Tliq - Tf) - phi_old,
-                        0)
-
-    # Configurar la ecuación de la temperatura
-    B = T_old.flatten() + dt * (alpha * lap_T.flatten() - (L / (cp * rho)) * dphi_dt.flatten())
-
-    # Resuelve el sistema utilizando la matriz A
-    try:
-        T_new_flat = solve(A, B)
-        T_new = T_new_flat.reshape((Ny, Nx))
-    except np.linalg.LinAlgError:
-        print("Error al resolver el sistema. Verifique la estabilidad y las condiciones iniciales.")
-        return T
-    
-    return T_new
-
-
-def actualizar_fraccion_fase(T, phi):
-    """Actualiza la fracción de fase basándose en la temperatura."""
-    return np.clip(np.where(T <= Tf, 0, 
-                            np.where(T >= Tliq, 1, 
-                                     (T - Tf)/(Tliq - Tf))), 0, 1)
-
-def aplicar_condiciones_frontera(T, n, dt):
-    """Aplica las condiciones de frontera a la temperatura."""
-    T[:, 0] = T[:, 1]   # Izquierda
-    T[:, -1] = -10 + (85 + 10) * np.clip(n * dt / 100, 0, 1)  # Derecha: rampa
-    T[0, :] = T[1, :]   # Inferior
-    T[-1, :] = T[-2, :] # Superior
+# Aplicar condiciones de frontera
+def aplicar_condiciones_frontera(T, n, dt, T_derecha_max):
+    T[:, 0] = T[:, 1]   # Frontera izquierda: Neumann
+    T[:, -1] = -10 + (85 + 10) * np.clip(n * dt / 10, 0, 1)  # Frontera derecha: rampa
+    T[0, :] = T[1, :]   # Frontera inferior: Neumann
+    T[-1, :] = T[-2, :] # Frontera superior: Neumann
     return T
 
-def visualizar(T, phi, ax1, ax2, n, dt, im1, im2):
-    """Actualiza la visualización en tiempo real."""
-    im1.set_data(T)
-    im2.set_data(phi)
-    ax1.set_title(f'Temperatura (°C) - t = {n*dt:.1f} s')
+# Actualizar el campo de temperatura
+def actualizar_temperatura(T, alpha, dt, dx, dy):
+    T_nueva = T.copy()
+    laplaciano = calcular_laplaciano(T, dx, dy)
+    for i in range(1, T.shape[0] - 1):
+        for j in range(1, T.shape[1] - 1):
+            T_nueva[i, j] += alpha * dt * laplaciano[i, j]
+    return T_nueva
+
+# Visualizar el campo de temperatura
+def visualizar(T, ax, n, dt, im):
+    im.set_data(T)
+    ax.set_title(f'Temperatura (\u00b0C) - t = {n*dt:.1f} s')
     plt.pause(0.01)
 
+# Función principal
 def main():
-    """Función principal para ejecutar la simulación."""
-    # Inicialización de temperatura y fracción de fase
-    T = inicializar_temperatura(Nx, Ny)
-    phi = np.zeros((Ny, Nx))  # Fracción de fase (0:hielo, 1:agua)
+    T = inicializar_temperatura(Nx, Ny, T_inicial)
 
-    # Generación de la matriz de coeficientes
-    A = matriz_coeficientes(Nx, Ny, dx, dy, alpha)
-
-    # Configuración de la visualización
     plt.ion()  # Modo interactivo
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-    plt.tight_layout(h_pad=2)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    im = ax.imshow(T, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
+                   origin='lower', cmap='coolwarm', vmin=-10, vmax=T_derecha_max)
+    plt.colorbar(im, ax=ax, label='Temperatura (\u00b0C)')
+    ax.set_xlabel('x (mm)')
+    ax.set_ylabel('y (mm)')
 
-    # Inicializar las visualizaciones
-    im1 = ax1.imshow(T, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
-                     origin='lower', cmap='coolwarm')
-    plt.colorbar(im1, ax=ax1)
-    ax1.set_title('Temperatura (°C)')
-
-    im2 = ax2.imshow(phi, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
-                     origin='lower', cmap='viridis', vmin=0, vmax=1)
-    plt.colorbar(im2, ax=ax2)
-    ax2.set_title('Fracción de fase (φ)')
-    ax2.set_xlabel('x (mm)')
-
-    # Bucle temporal
     for n in range(Nt):
-        T_old = T.copy()
-        phi_old = phi.copy()
+        T = aplicar_condiciones_frontera(T, n, dt, T_derecha_max)
+        T = actualizar_temperatura(T, alpha, dt, dx, dy)
 
-        # Aplicar condiciones de frontera
-        T = aplicar_condiciones_frontera(T, n, dt)
-        
-        # Actualización de temperatura (implícita)
-        T = actualizar_temperatura(T, T_old, phi, phi_old, Nt, dt, dx, dy, A)
-        
-        # Actualización de fracción de fase
-        phi = actualizar_fraccion_fase(T, phi)
-        
-        # Visualización en tiempo real
-        if n % 100 == 0:
-            visualizar(T, phi, ax1, ax2, n, dt, im1, im2)
+        if n % int(5 / dt) == 0:  # Visualizar cada 5 segundos
+            visualizar(T, ax, n, dt, im)
 
-    # Desactivar modo interactivo y mostrar plot final
     plt.ioff()
     plt.show()
 
