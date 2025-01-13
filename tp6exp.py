@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.sparse import diags
+from scipy.sparse.linalg import spsolve
 
+<<<<<<< HEAD
 # Parámetros físicos
 Lx, Ly = 10e-3, 1e-3  # Tamaño del dominio (m)
 Nx, Ny = 100, 10      # Número de nodos (y,x)
@@ -9,33 +12,46 @@ alpha = 1.14e-6       # Difusividad térmica (m^2/s)
 L = 334000            # Calor latente de fusión (J/kg)
 rho = 917             # Densidad del hielo (kg/m³)
 cp = 2100             # Calor específico del hielo (J/kg·K)
+=======
+# Definimos parámetros
+Lx, Ly = 10e-3, 1e-3  # Dominio (metros)
+Nx, Ny = 100, 10       # Número de nodos
+dx, dy = Lx/Nx, Ly/Ny  # Tamaño de celda
+alpha = 1.14e-6        # Difusividad térmica (m^2/s)
+dt = 0.001             # Paso de tiempo (s)
+Nt = 2000              # Número de pasos
+>>>>>>> c8b5185a9cc04b1da5fb2705dad9b2e06b34fd57
 
-# Parámetros temporales
-dt = 0.5 * min(dx**2, dy**2)/(2*alpha) * 0.5  # Condición de estabilidad
-Nt = int(100/dt)     # Número de pasos de tiempo
+# Inicializamos las matrices
+T = np.full((Ny, Nx), -10.0)  # Temperatura inicial (°C)
+T[:, 0] = -10                 # Borde izquierdo
+T[:, -1] = 75                # Borde derecho
 
-# Temperaturas características
-Tf = 0.0    # Temperatura de fusión (°C)
-Tliq = 0.05 # Temperatura de liquidus (°C)
+# Construcción de la matriz del sistema lineal
+r = alpha * dt / dx**2
+s = alpha * dt / dy**2
 
-def inicializar_temperatura(Nx, Ny):
-    """Inicializa el campo de temperatura con un gradiente suave."""
-    T = -10 + 10 * np.tanh(np.linspace(-5, 5, Nx))  # Rango ajustable
-    return T.reshape(1, Nx).repeat(Ny, axis=0)
+main_diag = (1 + 2 * r + 2 * s) * np.ones(Nx * Ny)
+off_diag_x = -r * np.ones(Nx * Ny - 1)
+off_diag_y = -s * np.ones(Nx * Ny - Nx)
 
-def actualizar_temperatura(T, T_old, phi, phi_old, Nt, dt, dx, dy):
-    """Actualiza el campo de temperatura y fracción de fase."""
-    lap_T = (np.roll(T_old, -1, axis=0) - 2*T_old + np.roll(T_old, 1, axis=0))/dy**2 + \
-            (np.roll(T_old, -1, axis=1) - 2*T_old + np.roll(T_old, 1, axis=1))/dx**2
+# Ajustamos diagonales para evitar conexiones incorrectas
+off_diag_x[np.arange(1, Ny) * Nx - 1] = 0
 
-    dphi_dt = np.where((Tf <= T_old) & (T_old <= Tliq), 
-                        (T_old - Tf)/(Tliq - Tf) - phi_old, 
-                        0)
+# Construimos la matriz dispersa
+diagonals = [main_diag, off_diag_x, off_diag_x, off_diag_y, off_diag_y]
+offsets = [0, -1, 1, -Nx, Nx]
+A = diags(diagonals, offsets, shape=(Nx * Ny, Nx * Ny), format='csr')
 
-    T[1:-1, 1:-1] += dt * (alpha * lap_T[1:-1, 1:-1] - (L/(cp*rho)) * dphi_dt[1:-1, 1:-1] / dt)
-
+# Simulación
+def aplicar_condiciones_de_frontera(T):
+    T[:, 0] = -10                # Borde izquierdo
+    T[:, -1] = 75               # Borde derecho
+    T[0, :] = T[1, :]           # Borde inferior
+    T[-1, :] = T[-2, :]         # Borde superior
     return T
 
+<<<<<<< HEAD
 def actualizar_fraccion_fase(T, phi):
     """Actualiza la fracción de fase basándose en la temperatura."""
     return np.clip(np.where(T <= Tf, 0, 
@@ -55,52 +71,30 @@ def visualizar(T, phi, ax1, ax2, n, dt, im1, im2):
     im1.set_data(T)
     im2.set_data(phi)
     ax1.set_title(f'Temperatura (°C) - t = {n*dt:.1f} s')
+=======
+def visualizar(T, n):
+    plt.clf()
+    plt.imshow(T, cmap='coolwarm', extent=[0, Lx*1000, 0, Ly*1000], origin='lower')
+    plt.colorbar(label='Temperatura (°C)')
+    plt.title(f'Tiempo = {n * dt:.2f} s')
+    plt.xlabel('x (mm)')
+    plt.ylabel('y (mm)')
+>>>>>>> c8b5185a9cc04b1da5fb2705dad9b2e06b34fd57
     plt.pause(0.01)
 
-def main():
-    """Función principal para ejecutar la simulación."""
-    # Inicialización de temperatura y fracción de fase
-    T = inicializar_temperatura(Nx, Ny)
-    phi = np.zeros((Ny, Nx))  # Fracción de fase (0:hielo, 1:agua)
+for n in range(1, Nt + 1):
+    # Vector b (estado actual)
+    T = aplicar_condiciones_de_frontera(T)
+    b = T.flatten()
 
-    # Configuración de la visualización
-    plt.ion()  # Modo interactivo
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-    plt.tight_layout(h_pad=2)
+    # Resolvemos el sistema lineal
+    T_new = spsolve(A, b).reshape(Ny, Nx)
 
-    # Inicializar las visualizaciones
-    im1 = ax1.imshow(T, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
-                     origin='lower', cmap='coolwarm')
-    plt.colorbar(im1, ax=ax1)
-    ax1.set_title('Temperatura (°C)')
+    # Actualizamos
+    T = T_new
 
-    im2 = ax2.imshow(phi, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
-                     origin='lower', cmap='viridis', vmin=0, vmax=1)
-    plt.colorbar(im2, ax=ax2)
-    ax2.set_title('Fracción de fase (φ)')
-    ax2.set_xlabel('x (mm)')
+    # Visualización
+    if n % 100 == 0 or n == 1:
+        visualizar(T, n)
 
-    # Bucle temporal
-    for n in range(Nt):
-        T_old = T.copy()
-        phi_old = phi.copy()
-
-        # Aplicar condiciones de frontera
-        T = aplicar_condiciones_frontera(T, n, dt)
-        
-        # Actualización de temperatura
-        T = actualizar_temperatura(T, T_old, phi, phi_old, Nt, dt, dx, dy)
-        
-        # Actualización de fracción de fase
-        phi = actualizar_fraccion_fase(T, phi)
-        
-        # Visualización en tiempo real
-        if n % 100 == 0:
-            visualizar(T, phi, ax1, ax2, n, dt, im1, im2)
-
-    # Desactivar modo interactivo y mostrar plot final
-    plt.ioff()
-    plt.show()
-
-# Ejecutar la simulación
-main()
+plt.show()
