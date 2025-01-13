@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.sparse import csr_matrix, eye, lil_matrix
+from scipy.sparse.linalg import spsolve
 # Parámetros físicos
 Lx, Ly = 10e-3, 1e-3  # Tamaño del dominio (m)
 Nx, Ny = 100, 10      # Número de nodos (y,x)
@@ -26,38 +27,33 @@ def inicializar_temperatura(Nx, Ny):
 from scipy.linalg import solve
 
 def actualizar_temperatura_implicito(T, dt, dx, dy, alpha):
-    """Actualiza el campo de temperatura usando un esquema implícito."""
     Ny, Nx = T.shape
-    N = Ny * Nx  # Tamaño total de la matriz
-
-    # Construir la matriz A
-    h2 = dx**2  # Suponemos dx = dy para simplicidad
-    A = np.eye(N) - (alpha * dt / h2) * construir_laplaciano(Nx, Ny)
-
-    # Vectorizar T y resolver el sistema
-    T_vec = T.flatten()  # Vector columna
-    T_new_vec = solve(A, T_vec)
-
-    # Reconvertir a la forma de matriz 2D
+    N = Ny * Nx
+    
+    h2 = dx**2
+    A = eye(N, format='csr') - (alpha * dt / h2) * construir_laplaciano(Nx, Ny)
+    
+    T_vec = T.flatten()
+    T_new_vec = spsolve(A, T_vec)  # Usar solver disperso
+    
     return T_new_vec.reshape(Ny, Nx)
 
 def construir_laplaciano(Nx, Ny):
-    """Construye la matriz del operador Laplaciano en 2D."""
     N = Nx * Ny
-    L = np.zeros((N, N))
-
+    L = lil_matrix((N, N))  # Usar matriz dispersa
+    
     for i in range(N):
-        L[i, i] = -4  # Término central
-        if i % Nx != 0:  # No es borde izquierdo
+        L[i, i] = -4
+        if i % Nx != 0:
             L[i, i - 1] = 1
-        if (i + 1) % Nx != 0:  # No es borde derecho
+        if (i + 1) % Nx != 0:
             L[i, i + 1] = 1
-        if i - Nx >= 0:  # No es borde superior
+        if i - Nx >= 0:
             L[i, i - Nx] = 1
-        if i + Nx < N:  # No es borde inferior
+        if i + Nx < N:
             L[i, i + Nx] = 1
-
-    return L
+            
+    return L.tocsr()  # Convertir a formato CSR para operaciones eficientes
 
 
 def actualizar_fraccion_fase(T, phi):
@@ -67,46 +63,23 @@ def actualizar_fraccion_fase(T, phi):
                                      (T - Tf)/(Tliq - Tf))), 0, 1)
 
 def actualizar_temperatura_con_fase(T, phi, dt, dx, dy, alpha, L, cp):
-    """Actualiza el campo de temperatura considerando el cambio de fase."""
-    Ny, Nx = T.shape
-    N = Ny * Nx  # Tamaño total de la matriz
-
-    # Construir la matriz A (implícita)
-    h2 = dx**2  # Suponemos dx = dy
-    A = np.eye(N) - (alpha * dt / h2) * construir_laplaciano(Nx, Ny)
-
-    # Vectorizar T y resolver el sistema de difusión térmica clásico
-    T_vec = T.flatten()
-    T_new_vec = solve(A, T_vec)
-    T_new = T_new_vec.reshape(Ny, Nx)
-
-    # Ajustar temperatura por cambio de fase
-    for i in range(Ny):
-        for j in range(Nx):
-            if T_new[i, j] > Tf and phi[i, j] < 1:  # Comienza la fusión
-                # Energía disponible
-                q = rho * cp * (T_new[i, j] - Tf)
-
-                # Fracción de fase nueva
-                delta_phi = min(q / (rho * L), 1 - phi[i, j])
-                phi[i, j] += delta_phi
-
-                # Ajustar temperatura
-                T_new[i, j] = Tf
-
-            elif T_new[i, j] < Tf and phi[i, j] > 0:  # Comienza la solidificación
-                # Energía liberada
-                q = -rho * cp * (T_new[i, j] - Tf)
-
-                # Fracción de fase nueva
-                delta_phi = min(q / (rho * L), phi[i, j])
-                phi[i, j] -= delta_phi
-
-                # Ajustar temperatura
-                T_new[i, j] = Tf
-
+    T_new = actualizar_temperatura_implicito(T, dt, dx, dy, alpha)
+    
+    # Fusión
+    mask_fusion = (T_new > Tf) & (phi < 1)
+    q_fusion = rho * cp * (T_new[mask_fusion] - Tf)
+    delta_phi_fusion = np.minimum(q_fusion / (rho * L), 1 - phi[mask_fusion])
+    phi[mask_fusion] += delta_phi_fusion
+    T_new[mask_fusion] = Tf
+    
+    # Solidificación
+    mask_solid = (T_new < Tf) & (phi > 0)
+    q_solid = -rho * cp * (T_new[mask_solid] - Tf)
+    delta_phi_solid = np.minimum(q_solid / (rho * L), phi[mask_solid])
+    phi[mask_solid] -= delta_phi_solid
+    T_new[mask_solid] = Tf
+    
     return T_new, phi
-
 def aplicar_condiciones_frontera(T, n, dt):
     """Aplica las condiciones de frontera a la temperatura."""
     T[:, 0] = T[:, 1]   # Izquierda
