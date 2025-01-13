@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 # Parámetros físicos
 Lx, Ly = 10e-3, 1e-3  # Tamaño del dominio (m)
-Ny, Nx = 10, 100      # Número de nodos (y,x)
+Nx, Ny = 100, 10      # Número de nodos (y,x)
 dx, dy = Lx/Nx, Ly/Ny # Tamaño de celda
 alpha = 1.14e-6       # Difusividad térmica (m^2/s)
 L = 334000            # Calor latente de fusión (J/kg)
@@ -45,7 +45,7 @@ def actualizar_fraccion_fase(T, phi):
 def aplicar_condiciones_frontera(T, n, dt):
     """Aplica las condiciones de frontera a la temperatura."""
     T[:, 0] = T[:, 1]   # Izquierda
-    T[:, -1] = -10 + (85 + 10) * np.clip(n * dt / 100, 0, 1)  # Derecha: rampa
+    T[:, -1] = -10 + (85 + 10) * np.clip(n * dt / 10, 0, 1)  # Derecha: rampa
     T[0, :] = T[1, :]   # Inferior
     T[-1, :] = T[-2, :] # Superior
     return T
