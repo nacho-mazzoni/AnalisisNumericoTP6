@@ -1,19 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.sparse import csr_matrix, eye, lil_matrix
-from scipy.sparse.linalg import spsolve
+
 # Parámetros físicos
 Lx, Ly = 10e-3, 1e-3  # Tamaño del dominio (m)
-Nx, Ny = 100, 10      # Número de nodos (y,x)
+Ny, Nx = 10, 100      # Número de nodos (y,x)
 dx, dy = Lx/Nx, Ly/Ny # Tamaño de celda
 alpha = 1.14e-6       # Difusividad térmica (m^2/s)
 L = 334000            # Calor latente de fusión (J/kg)
 rho = 917             # Densidad del hielo (kg/m³)
 cp = 2100             # Calor específico del hielo (J/kg·K)
-
-# Parámetros temporales
-dt = 0.5 * min(dx**2, dy**2)/(2*alpha) * 0.5  # Condición de estabilidad
-Nt = int(100/dt)     # Número de pasos de tiempo
 
 # Temperaturas características
 Tf = 0.0    # Temperatura de fusión (°C)
@@ -24,37 +19,18 @@ def inicializar_temperatura(Nx, Ny):
     T = -10 + 10 * np.tanh(np.linspace(-5, 5, Nx))  # Rango ajustable
     return T.reshape(1, Nx).repeat(Ny, axis=0)
 
-from scipy.linalg import solve
+def actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy):
+    """Actualiza el campo de temperatura y fracción de fase."""
+    lap_T = (np.roll(T_old, -1, axis=0) - 2*T_old + np.roll(T_old, 1, axis=0))/dy**2 + \
+            (np.roll(T_old, -1, axis=1) - 2*T_old + np.roll(T_old, 1, axis=1))/dx**2
 
-def actualizar_temperatura_implicito(T, dt, dx, dy, alpha):
-    Ny, Nx = T.shape
-    N = Ny * Nx
-    
-    h2 = dx**2
-    A = eye(N, format='csr') - (alpha * dt / h2) * construir_laplaciano(Nx, Ny)
-    
-    T_vec = T.flatten()
-    T_new_vec = spsolve(A, T_vec)  # Usar solver disperso
-    
-    return T_new_vec.reshape(Ny, Nx)
+    dphi_dt = np.where((Tf <= T_old) & (T_old <= Tliq), 
+                        (T_old - Tf)/(Tliq - Tf) - phi_old, 
+                        0)
 
-def construir_laplaciano(Nx, Ny):
-    N = Nx * Ny
-    L = lil_matrix((N, N))  # Usar matriz dispersa
-    
-    for i in range(N):
-        L[i, i] = -4
-        if i % Nx != 0:
-            L[i, i - 1] = 1
-        if (i + 1) % Nx != 0:
-            L[i, i + 1] = 1
-        if i - Nx >= 0:
-            L[i, i - Nx] = 1
-        if i + Nx < N:
-            L[i, i + Nx] = 1
-            
-    return L.tocsr()  # Convertir a formato CSR para operaciones eficientes
+    T[1:-1, 1:-1] += dt * (alpha * lap_T[1:-1, 1:-1] - (L/(cp*rho)) * dphi_dt[1:-1, 1:-1] / dt)
 
+    return T
 
 def actualizar_fraccion_fase(T, phi):
     """Actualiza la fracción de fase basándose en la temperatura."""
@@ -62,31 +38,25 @@ def actualizar_fraccion_fase(T, phi):
                             np.where(T >= Tliq, 1, 
                                      (T - Tf)/(Tliq - Tf))), 0, 1)
 
-def actualizar_temperatura_con_fase(T, phi, dt, dx, dy, alpha, L, cp):
-    T_new = actualizar_temperatura_implicito(T, dt, dx, dy, alpha)
-    
-    # Fusión
-    mask_fusion = (T_new > Tf) & (phi < 1)
-    q_fusion = rho * cp * (T_new[mask_fusion] - Tf)
-    delta_phi_fusion = np.minimum(q_fusion / (rho * L), 1 - phi[mask_fusion])
-    phi[mask_fusion] += delta_phi_fusion
-    T_new[mask_fusion] = Tf
-    
-    # Solidificación
-    mask_solid = (T_new < Tf) & (phi > 0)
-    q_solid = -rho * cp * (T_new[mask_solid] - Tf)
-    delta_phi_solid = np.minimum(q_solid / (rho * L), phi[mask_solid])
-    phi[mask_solid] -= delta_phi_solid
-    T_new[mask_solid] = Tf
-    
-    return T_new, phi
-def aplicar_condiciones_frontera(T, tiempo_total):
+def aplicar_condiciones_frontera(T, n, dt):
     """Aplica las condiciones de frontera a la temperatura."""
     T[:, 0] = T[:, 1]   # Izquierda
-    T[:, -1] = -10 + (85 + 10) * np.clip(tiempo_total / 10, 0, 1)  # Derecha: rampa
+    T[:, -1] = -10 + (85 + 10) * np.clip(n * dt / 10, 0, 1)  # Derecha: rampa
     T[0, :] = T[1, :]   # Inferior
     T[-1, :] = T[-2, :] # Superior
     return T
+
+def calcular_dt_adaptativo(T, dx, dy, alpha):
+    """Calcula el paso de tiempo adaptativo basado en la condición de estabilidad."""
+    return 0.5 * min(dx**2, dy**2) / (2 * alpha)
+
+def calcular_dt_mayor(T, dx, dy, alpha):
+    """Calcula un paso de tiempo mayor al máximo permitido por el criterio de estabilidad."""
+    return 2 * calcular_dt_adaptativo(T, dx, dy, alpha)
+
+def calcular_dt_pequeno(T, dx, dy, alpha):
+    """Calcula un paso de tiempo más pequeño que el máximo permitido por el criterio de estabilidad."""
+    return 0.1 * calcular_dt_adaptativo(T, dx, dy, alpha)
 
 def visualizar(T, phi, ax1, ax2, n, dt, im1, im2):
     """Actualiza la visualización en tiempo real."""
@@ -94,27 +64,7 @@ def visualizar(T, phi, ax1, ax2, n, dt, im1, im2):
     im2.set_data(phi)
     ax1.set_title(f'Temperatura (°C) - t = {n*dt:.1f} s')
     plt.pause(0.01)
-def calcular_dt_adaptativo(T_old, T_new, dt_actual, dx, dy, alpha):
-    # Parámetros de control
-    factor_incremento = 1.1  # Incremento máximo por paso
-    factor_decremento = 0.8  # Decremento si hay inestabilidad
-    
-    # Límites para dt
-    dt_min = 0.5 * min(dx**2, dy**2)/(2*alpha)
-    dt_max = 10 * dt_min
-    
-    # Calcular variación de temperatura
-    delta_T = np.max(np.abs(T_new - T_old))
-    
-    # Criterios de ajuste
-    if delta_T < 0.1:  # Variación pequeña
-        dt_nuevo = min(dt_actual * factor_incremento, dt_max)
-    elif delta_T > 1.0:  # Variación grande
-        dt_nuevo = max(dt_actual * factor_decremento, dt_min)
-    else:
-        dt_nuevo = dt_actual
-        
-    return dt_nuevo
+
 def main():
     """Función principal para ejecutar la simulación."""
     # Inicialización de temperatura y fracción de fase
@@ -128,7 +78,7 @@ def main():
 
     # Inicializar las visualizaciones
     im1 = ax1.imshow(T, aspect='auto', extent=[0, Lx*1000, 0, Ly*1000], 
-                     origin='lower', cmap='coolwarm', vmin=-10, vmax=50)
+                     origin='lower', cmap='coolwarm', vmin=-10, vmax=85)
     plt.colorbar(im1, ax=ax1)
     ax1.set_title('Temperatura (°C)')
 
@@ -138,39 +88,50 @@ def main():
     ax2.set_title('Fracción de fase (φ)')
     ax2.set_xlabel('x (mm)')
 
-    # Inicializar dt
-    dt = 0.5 * min(dx**2, dy**2)/(2*alpha)
-    tiempo_total = 0
-    tiempos = []
-    dt_historia = []
-    
-    while tiempo_total < 50:  # 100 segundos totales
+    # Variables para guardar históricos
+    historico_temp_promedio = []
+
+    # Bucle temporal
+    t_total = 100  # Tiempo total de simulación (s)
+    t = 0
+    n = 0
+    while t < t_total:
+        dt = calcular_dt_adaptativo(T, dx, dy, alpha)
+        #dt = calcular_dt_mayor(T,dx,dy,alpha)
+        #dt = calcular_dt_pequeno(T,dx,dy,alpha)
         T_old = T.copy()
         phi_old = phi.copy()
-        
-        # Aplicar condiciones de frontera y actualizar temperatura
-        T = aplicar_condiciones_frontera(T, tiempo_total)
-        T, phi = actualizar_temperatura_con_fase(T, phi, dt, dx, dy, alpha, L, cp)
-        
-        # Actualizar dt para el próximo paso
-        dt = calcular_dt_adaptativo(T_old, T, dt, dx, dy, alpha)
-        tiempo_total += dt
-        
-        # Guardar historia
-        tiempos.append(tiempo_total)
-        dt_historia.append(dt)
-        
-        # Visualización
-        if len(tiempos) % 100 == 0:
-            visualizar(T, phi, ax1, ax2, tiempo_total, dt, im1, im2)
 
-    # Graficar evolución del dt
-    plt.figure()
-    plt.plot(tiempos, dt_historia)
+        # Aplicar condiciones de frontera
+        T = aplicar_condiciones_frontera(T, n, dt)
+
+        # Actualización de temperatura
+        T = actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy)
+
+        # Actualización de fracción de fase
+        phi = actualizar_fraccion_fase(T, phi)
+
+        # Guardar temperatura promedio
+        historico_temp_promedio.append(T.mean())
+
+        # Visualización en tiempo real
+        if n % 100 == 0:
+            visualizar(T, phi, ax1, ax2, n, dt, im1, im2)
+
+        t += dt
+        n += 1
+
+    # Desactivar modo interactivo y mostrar plot final
+    plt.ioff()
+    plt.show()
+
+    # Graficar históricos
+    plt.figure(figsize=(10, 5))
+    plt.plot(np.linspace(0, t_total, len(historico_temp_promedio)), historico_temp_promedio)
     plt.xlabel('Tiempo (s)')
-    plt.ylabel('dt (s)')
-    plt.title('Evolución del paso de tiempo')
-    plt.grid(True)
+    plt.ylabel('Temperatura promedio (°C)')
+    plt.title('Evolución de la temperatura promedio en el dominio')
+    plt.grid()
     plt.show()
 
 # Ejecutar la simulación
