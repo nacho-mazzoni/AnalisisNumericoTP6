@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 # Parámetros del dominio
 Lx = 21e-3  # Longitud total en el eje x (21 mm)
 Ly = 11e-3  # Longitud total en el eje y (11 mm)
@@ -39,16 +38,15 @@ def definir_geometria(T):
     # Partes horizontales de agua (a la izquierda y derecha del hielo)
     T[altura_total - altura_hielo:, :centro_x - ancho_hielo//2] = 20.0
     T[altura_total - altura_hielo:, centro_x + ancho_hielo//2:] = 20.0
-
+ 
     return T
 
 # Definir la geometría de T_inicial
 T_inicial = definir_geometria(T)
 
 # Calcular un paso de tiempo estable basado en la condición CFL
-cfl = 0.5  # Número CFL (típicamente entre 0.5 y 1.0)
-dt_estable = cfl * min(dx**2 / (2 * alpha), dy**2 / (2 * alpha))
-
+cfl = 0.5  # Reducir el número CFL para mayor estabilidad
+dt_estable = 0.01
 
 # Inicializar la fracción de fase (phi)
 def inicializar_phi():
@@ -69,24 +67,29 @@ def inicializar_phi():
 phi = inicializar_phi()
 phi_old = np.zeros_like(phi)
 
-# Resto del código sin cambios...
+# Función para calcular el porcentaje de hielo restante
+def porcentaje_hielo_restante(phi):
+    # Máscara de hielo (phi == 0)
+    hielo_inicial = np.sum(phi == 0)  # Área inicial de hielo
+    
+    # Si no hay hielo inicial, devolver 0%
+    if hielo_inicial == 0:
+        return 0.0
+    
+    # Máscara de hielo actual
+    hielo_actual = np.sum(phi == 0)  # Área actual de hielo
+    
+    # Calcular el porcentaje
+    porcentaje_restante = (hielo_actual / hielo_inicial) * 100
+    
+    return porcentaje_restante
 
-# Definir la geometría de T_inicial para porcentaje_hielo_restante
-T_inicial = definir_geometria(T)
-
-#Temperaturas caracteristicas
-Tf = 0.0 #Temperatura de fusion (C)
-Tliq = 0.05 #Temperatura de liquidus (C)
-
+# Función para actualizar la temperatura
 def actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy):
     """
     Actualiza la temperatura usando diferencias finitas, considerando el cambio de fase
     y condiciones de borde de aislamiento térmico.
     """
-    # Verificar dimensiones
-    if phi_old.shape != T.shape or phi.shape != T.shape:
-        raise ValueError(f"Las dimensiones de phi ({phi.shape}) o phi_old ({phi_old.shape}) no coinciden con T ({T.shape})")
-
     # Crear máscara para celdas válidas
     mascara_valida = ~np.isnan(T)
 
@@ -119,13 +122,13 @@ def actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy):
     delta_T = dt * (alpha * lap_T[mascara_valida])
 
     # Considerar el cambio de fase de hielo a agua
-    # Esto hace que cuando la temperatura esté cerca de la fusión, se consuma más energía para derretir el hielo
     delta_T -= (L / (cp * rho)) * (phi[mascara_valida] - phi_old[mascara_valida])
 
     T_nuevo[mascara_valida] += delta_T
 
     return T_nuevo
 
+# Función para actualizar la fracción de fase
 def actualizar_fraccion_fase(T):
     """
     Actualiza la fracción de fase basándose en la temperatura.
@@ -154,80 +157,18 @@ def actualizar_fraccion_fase(T):
 
     return phi_actualizado
 
-def aplicar_condiciones_frontera(T):
-    """Aplica las condiciones de frontera a la simulación considerando solo celdas válidas."""
-    # Máscara de celdas válidas
-    mascara_valida = ~np.isnan(T)
-
-    # Coordenadas de la T
-    Nx, Ny = T.shape
-    ancho_hielo = np.sum(~np.isnan(T[-1, :]))  # Ancho del hielo
-    altura_hielo = np.sum(~np.isnan(T[:, Nx // 2]))  # Altura del hielo
-    centro_x = Nx // 2
-
-    # 1. Borde superior (horizontal, hielo)
-    indices = (slice(-1, None), slice(centro_x - ancho_hielo // 2, centro_x + ancho_hielo // 2))
-    if np.all(mascara_valida[indices]):
-        T[indices] = T[-2, centro_x - ancho_hielo // 2 : centro_x + ancho_hielo // 2]
-
-    # 2. Borde inferior izquierdo (agua, horizontal)
-    indices = (0, slice(None, centro_x - ancho_hielo // 2))
-    if np.all(mascara_valida[indices]):
-        T[0, : centro_x - ancho_hielo // 2] = T[1, : centro_x - ancho_hielo // 2]
-
-    # 3. Borde inferior derecho (agua, horizontal)
-    indices = (0, slice(centro_x + ancho_hielo // 2, None))
-    if np.all(mascara_valida[indices]):
-        T[0, centro_x + ancho_hielo // 2 :] = T[1, centro_x + ancho_hielo // 2 :]
-
-    # 4. Borde izquierdo (agua, vertical)
-    if np.all(mascara_valida[:, 0]):
-        T[:, 0] = T[:, 1]
-
-    # 5. Borde derecho (agua, vertical)
-    if np.all(mascara_valida[:, -1]):
-        T[:, -1] = T[:, -2]
-
-    # 6. Borde interior (entre hielo y agua, vertical) izquierda
-    indices = (slice(None), centro_x - ancho_hielo // 2)
-    if np.all(mascara_valida[indices]):
-        T[:, centro_x - ancho_hielo // 2] = T[:, centro_x - ancho_hielo // 2 - 1]
-
-    # 7. Borde interior (entre hielo y agua, vertical) derecha
-    indices = (slice(None), centro_x + ancho_hielo // 2 - 1)
-    if np.all(mascara_valida[indices]):
-        T[:, centro_x + ancho_hielo // 2 - 1] = T[:, centro_x + ancho_hielo // 2]
-
-    return T
-
-
-def porcentaje_hielo_restante(T):
-    
-    # Máscara de hielo (T < 0°C)
-    hielo_inicial = np.nansum(T_inicial < 0)  # Área inicial de hielo
-    
-    # Máscara de hielo actual
-    hielo_actual = np.nansum(T < 0)  # Área actual de hielo
-    
-    # Calcular el porcentaje
-    porcentaje_restante = (hielo_actual / hielo_inicial) * 100
-    
-    return porcentaje_restante 
-
+# Función principal
 def main():
     # Inicialización de temperatura y fracción de fase
     T_bucle = definir_geometria(T)
     phi = inicializar_phi()  # Fracción de fase (0:hielo, 1:agua)
     phi_old = np.zeros((Ny, Nx))  # Inicializar phi_old con las mismas dimensiones
-    #definir variable tiempo en segundos
-    tiempo_Derretimiento = 0.0
+    tiempo_Derretimiento = 0.0  # Tiempo acumulado
     
     # Bucle temporal
-    while(porcentaje_hielo_restante(T_bucle) >= 50):  # Bucle por porcentaje de hielo
+    while porcentaje_hielo_restante(phi) >= 50:  # Bucle por porcentaje de hielo
         T_old = T_bucle.copy()
         phi_old = phi.copy()
-        # Aplicar condiciones de frontera
-        T_bucle = aplicar_condiciones_frontera(T_bucle)
 
         # Actualización de temperatura
         T_bucle = actualizar_temperatura(T_bucle, T_old, phi, phi_old, dt_estable, dx, dy)
@@ -236,12 +177,11 @@ def main():
         phi = actualizar_fraccion_fase(T_bucle)
 
         # Calcular el porcentaje de hielo restante
-        porcentaje = porcentaje_hielo_restante(T_bucle)
+        porcentaje = porcentaje_hielo_restante(phi)
         print(f"Porcentaje de hielo restante: {porcentaje:.2f}%")
-        tiempo_Derretimiento = tiempo_Derretimiento + dt_estable
+        tiempo_Derretimiento += dt_estable
 
     print(f"Tiempo en derretirse la mitad del hielo: {tiempo_Derretimiento}")
-
 
 # Ejecutar la simulación
 main()
