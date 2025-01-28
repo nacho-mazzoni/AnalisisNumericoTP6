@@ -102,15 +102,9 @@ def actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy):
                     (T_old[i, j + 1] - 2 * T_old[i, j] + T_old[i, j - 1]) / dx**2
                 )
 
-    # Condiciones de frontera de aislamiento (Neumann: derivada normal = 0)
-    # Borde superior
-    lap_T[-1, :] = lap_T[-2, :]
-    # Borde inferior
-    lap_T[0, :] = lap_T[1, :]
-    # Borde izquierdo
-    lap_T[:, 0] = lap_T[:, 1]
-    # Borde derecho
-    lap_T[:, -1] = lap_T[:, -2]
+    # Condiciones de frontera de aislamiento para los bordes superior e inferior
+    lap_T[-1, :] = lap_T[-2, :]  # Borde superior
+    lap_T[0, :] = lap_T[1, :]    # Borde inferior
 
     # Actualizar la temperatura solo en las celdas válidas
     T_nuevo = T.copy()
@@ -124,7 +118,18 @@ def actualizar_temperatura(T, T_old, phi, phi_old, dt, dx, dy):
 
     T_nuevo[mascara_valida] += delta_T
 
+    # Ajuste adicional en la interfaz hielo-agua
+    for i in range(1, T.shape[0] - 1):
+        for j in range(1, T.shape[1] - 1):
+            if phi[i, j] < 1 and phi[i, j] > 0:  # En la interfaz
+                T[i, j] += alpha * dt * (
+                    (T[i+1, j] - 2*T[i, j] + T[i-1, j]) / dy**2 +
+                    (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2
+                )
+
     return T_nuevo
+
+
 
 def actualizar_fraccion_fase(T):
     """
@@ -188,18 +193,13 @@ def aplicar_condiciones_frontera(T):
     if np.all(mascara_valida[:, -1]):
         T[:, -1] = T[:, -2]
 
-    # 6. Borde interior (entre hielo y agua, vertical) izquierda
-    indices = (slice(None), centro_x - ancho_hielo // 2)
-    if np.all(mascara_valida[indices]):
-        T[:, centro_x - ancho_hielo // 2] = T[:, centro_x - ancho_hielo // 2 - 1]
-
-    # 7. Borde interior (entre hielo y agua, vertical) derecha
-    indices = (slice(None), centro_x + ancho_hielo // 2 - 1)
-    if np.all(mascara_valida[indices]):
-        T[:, centro_x + ancho_hielo // 2 - 1] = T[:, centro_x + ancho_hielo // 2]
+    # Interfaces entre hielo y agua
+    # Borde interior izquierdo (vertical)
+    T[:, centro_x - ancho_hielo//2] = 0.5 * (T[:, centro_x - ancho_hielo//2 - 1] + T[:, centro_x - ancho_hielo//2 + 1])
+    # Borde interior derecho (vertical)
+    T[:, centro_x + ancho_hielo//2] = 0.5 * (T[:, centro_x + ancho_hielo//2 - 1] + T[:, centro_x + ancho_hielo//2 + 1])
 
     return T
-
 
 def porcentaje_hielo_restante(T):
     
@@ -213,6 +213,36 @@ def porcentaje_hielo_restante(T):
     porcentaje_restante = (hielo_actual / hielo_inicial) * 100
     
     return porcentaje_restante 
+
+def registrar_temperatura_manual(T):
+    """
+    Imprime las temperaturas en puntos específicos del dominio.
+
+    Parámetros:
+        T (numpy.ndarray): Matriz de temperaturas actual.
+    """
+    # Convertir dimensiones físicas a índices
+    ancho_hielo = int(1e-3 / dx)  # 1 mm
+    altura_hielo = int(1e-3 / dy)  # 1 mm
+    centro_x = Nx // 2
+    altura_total = Ny
+    # Definir manualmente las coordenadas de los puntos de interés
+    puntos = {
+        "Centro del hielo": (centro_x, (altura_hielo*0.5)),  # Aproximadamente en el centro del hielo
+        "Intersección izquierda (hielo-agua)": (centro_x-(0.5*ancho_hielo), (altura_hielo*0.5)),  # En la frontera izquierda del hielo
+        "Intersección derecha (hielo-agua)": (centro_x+(0.5*ancho_hielo), (altura_hielo*0.5)),  # En la frontera derecha del hielo
+        "Centro del agua arriba (sobre el hielo)": (centro_x, (altura_total*0.5)),  # En el agua, sobre el hielo
+    }
+
+    print("Temperaturas en puntos de interés:")
+    for nombre, (x, y) in puntos.items():
+        try:
+            temp = T[y, x]  # Acceder a la matriz con coordenadas (y, x)
+            print(f"{nombre}: {temp:.2f}°C")
+        except IndexError:
+            print(f"{nombre}: Coordenadas ({x}, {y}) están fuera del rango del dominio.")
+
+
 
 def main():
     # Inicialización de temperatura y fracción de fase
@@ -235,6 +265,9 @@ def main():
         # Actualización de fracción de fase
         phi = actualizar_fraccion_fase(T_bucle)
 
+        # Registrar y mostrar temperaturas con nombres
+        registrar_temperatura_manual(T_bucle)
+        
         # Calcular el porcentaje de hielo restante
         porcentaje = porcentaje_hielo_restante(T_bucle)
         print(f"Porcentaje de hielo restante: {porcentaje:.2f}%")
