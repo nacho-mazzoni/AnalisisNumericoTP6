@@ -40,8 +40,9 @@ def definir_geometria(Ny, Nx):
     return T
 
 def inicializar_phi(T):
-    phi = np.ones_like(T)
-    phi[T <= Tf] = 0
+    phi = np.full_like(T, np.nan)
+    phi[T <= Tf] = 0.0
+    phi[T > Tf] = 1.0
     return phi
 
 def actualizarFraccionFase(T):
@@ -56,16 +57,30 @@ def actualizarFraccionFase(T):
 
 def actualizarTemperatura(T, phi, phi_old, dt):
     T_nuevo = T.copy()
-    mascara_valida = ~np.isnan(T)
+    mascara_valida = ~np.isnan(T)  # Filtramos las celdas válidas de T
     
-    lap_T = np.zeros_like(T)
+    lap_T = np.zeros_like(T)  # Inicializamos la laplaciana de T con ceros
     for i in range(1, T.shape[0] - 1):
         for j in range(1, T.shape[1] - 1):
             if mascara_valida[i, j]:
-                lap_T[i, j] = (
-                    (T[i+1, j] - 2*T[i, j] + T[i-1, j]) / dy**2 +
-                    (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2
-                )
+                # Identificar los vecinos válidos de la celda (i, j)
+                vecinos = []
+                if mascara_valida[i+1, j]:  # Abajo
+                    vecinos.append(T[i+1, j])
+                if mascara_valida[i-1, j]:  # Arriba
+                    vecinos.append(T[i-1, j])
+                if mascara_valida[i, j+1]:  # Derecha
+                    vecinos.append(T[i, j+1])
+                if mascara_valida[i, j-1]:  # Izquierda
+                    vecinos.append(T[i, j-1])
+                
+                if len(vecinos)==4:
+                    lap_T[i, j] = ((T[i+1, j] - 2*T[i, j] + T[i-1, j]) / dy**2 +
+                        (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2)
+                elif len(vecinos) >= 2: # Si hay al menos 2 vecinos válidos, calculamos la laplaciana
+                        lap_T[i, j] = (
+                            (np.mean(vecinos) - T[i, j]) / dx**2  # Promediamos los vecinos válidos solamente porque dx == dy
+                        )
 
     # Factor de ajuste para el calor latente
     factor_ajuste = 15.0
@@ -74,13 +89,13 @@ def actualizarTemperatura(T, phi, phi_old, dt):
     delta_phi = phi - phi_old
     calor_latente = factor_ajuste * L * delta_phi / (cp * dt)
     
-    # Actualizar temperatura
+    # Actualizar temperatura solo en celdas válidas
     T_nuevo[mascara_valida] += dt * (
-        alpha * lap_T[mascara_valida] -
-        calor_latente[mascara_valida] / factor_ajuste
+        alpha * lap_T[mascara_valida] - calor_latente[mascara_valida] / factor_ajuste
     )
     
     return T_nuevo
+
 
 def aplicarCondicionesFrontera(T):
     mascara_valida = ~np.isnan(T)
@@ -98,35 +113,26 @@ def aplicarCondicionesFrontera(T):
 def porcentajeRestanteHielo(phi, phi_inicial):
     hielo_inicial = np.sum(phi_inicial == 0)
     hielo_actual = np.sum(phi == 0)
-    return (hielo_actual / hielo_inicial) * 100 if hielo_inicial > 0 else 0
+    if hielo_inicial <=0 : return 0
+    else: return ((hielo_actual/hielo_inicial)*100)
 
 def main():
     T = definir_geometria(Ny, Nx)
     phi = inicializar_phi(T)
     phi_inicial = phi.copy()
     tiempo_derretimiento = 0.0
-    
-    while True:
-        T_old = T.copy()
+    porcentaje = porcentajeRestanteHielo(phi, phi_inicial)
+    while porcentaje >= 50:
         phi_old = phi.copy()
-        
         T = actualizarTemperatura(T, phi, phi_old, dt_estable)
         T = aplicarCondicionesFrontera(T)
         phi = actualizarFraccionFase(T)
-        
-        tiempo_derretimiento += dt_estable
-        porcentaje = porcentajeRestanteHielo(phi, phi_inicial)
-        
-        if tiempo_derretimiento % 0.01 < dt_estable:
-            print(f"Tiempo: {tiempo_derretimiento:.2f}s, Porcentaje de hielo: {porcentaje:.2f}%")
-        
-        if porcentaje <= 50:
-            print(f"Tiempo final: {tiempo_derretimiento:.2f}s")
-            break
-        
-        if tiempo_derretimiento > 5:
-            print("Tiempo máximo alcanzado")
-            break
 
-if __name__ == "__main__":
-    main()
+        print(f"Porcentaje restante de hielo: {porcentaje: .2f}%")
+        porcentaje = porcentajeRestanteHielo(phi, phi_inicial)
+        tiempo_derretimiento += dt_estable
+
+    print(f"Tiempo total en derretirse: {tiempo_derretimiento: .2f} segundos")
+        
+#Ejecutar codigo
+main()
