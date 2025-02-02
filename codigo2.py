@@ -16,7 +16,7 @@ Tf = 0.0             # Temperatura de fusión (°C)
 Tliq = 0.05          # Temperatura de liquidus (°C)
 
 # Diferencial de tiempo estable
-dt_estable =  min(dx**2 / (2 * alpha), dy**2 / (2 * alpha))
+dt_estable = 0.25*min(dx**2 / (2 * alpha), dy**2 / (2 * alpha))
 
 def definir_geometria(Ny, Nx):
     T = np.full((Ny, Nx), np.nan)
@@ -28,7 +28,7 @@ def definir_geometria(Ny, Nx):
     altura_total = Ny
 
     # Hielo (parte central de la T)
-    T[altura_total - altura_hielo:, centro_x - ancho_hielo//2:centro_x + ancho_hielo//2] = -10.0
+    T[altura_total - altura_hielo:, centro_x - ancho_hielo//2:centro_x + ancho_hielo//2] = -30.0
 
     # Parte vertical del agua
     T[:altura_total - altura_hielo, centro_x - ancho_hielo//2:centro_x + ancho_hielo//2] = 20.0
@@ -118,10 +118,11 @@ def porcentajeRestanteHielo(phi, phi_inicial):
 
 def main():
     T = definir_geometria(Ny, Nx)
-    phi = inicializar_phi(T)
-    phi_inicial = phi.copy()
+    phi_inicial = inicializar_phi(T)
+    phi = phi_inicial.copy()
     tiempo_derretimiento = 0.0
     porcentaje = porcentajeRestanteHielo(phi, phi_inicial)
+
     while porcentaje >= 50:
         phi_old = phi.copy()
         T = actualizarTemperatura(T, phi, phi_old, dt_estable)
@@ -136,3 +137,51 @@ def main():
         
 #Ejecutar codigo
 main()
+
+"""
+def actualizarTemperatura(T, phi, phi_old, dt):
+    T_nuevo = T.copy()
+    mascara_valida = ~np.isnan(T)  # Filtramos las celdas válidas de T
+    
+    lap_T = np.zeros_like(T)  # Inicializamos la laplaciana de T con ceros
+    for i in range(1, T.shape[0] - 1):
+        for j in range(1, T.shape[1] - 1):
+            if mascara_valida[i, j]:
+                if i==0:
+                    if j==0:
+                        lap_T[i, j] = ((T[i+1, j] - T[i, j]) / dy**2 +
+                                (T[i, j+1] - T[i, j]) / dx**2)
+                    elif j!=(Nx-1): 
+                        lap_T[i, j] = ((T[i+1, j] - T[i, j]) / dy**2 +
+                                    (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2)
+                    else: 
+                        lap_T[i, j] = ((T[i+1, j] - T[i, j]) / dy**2 +
+                                (-T[i, j] + T[i, j-1]) / dx**2)
+                elif i==(Ny-1):
+                        if j==0:
+                            lap_T[i, j] = ((-T[i, j] + T[i-1, j]) / dy**2 +
+                                    (T[i, j+1] - T[i, j]) / dx**2) 
+                        elif j!=(Nx-1):
+                            lap_T[i, j] = ((-T[i, j] + T[i-1, j]) / dy**2 +
+                                    (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2)
+                        else: 
+                            lap_T[i, j] = ((-T[i, j] + T[i-1, j]) / dy**2 +
+                                    (-T[i, j] + T[i, j-1]) / dx**2) 
+                else: 
+                    lap_T[i, j] =  ((T[i+1, j] - 2*T[i, j] + T[i-1, j]) / dy**2 +
+                                (T[i, j+1] - 2*T[i, j] + T[i, j-1]) / dx**2)
+
+    # Factor de ajuste para el calor latente
+    factor_ajuste = 15.0
+    
+    # Calcular cambio de fase y calor latente
+    delta_phi = phi - phi_old
+    calor_latente = factor_ajuste * L * delta_phi / (cp * dt)
+    
+    # Actualizar temperatura solo en celdas válidas
+    T_nuevo[mascara_valida] += dt * (
+        alpha * lap_T[mascara_valida] - calor_latente[mascara_valida] / factor_ajuste
+    )
+    
+    return T_nuevo
+"""
