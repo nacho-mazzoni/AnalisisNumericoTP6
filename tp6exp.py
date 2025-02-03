@@ -11,7 +11,7 @@ rho = 917             # Densidad del hielo (kg/m³)
 cp = 2100             # Calor específico del hielo (J/kg·K)
 
 # Parámetros temporales
-dt = 0.5 * min(dx**2, dy**2)/(2*alpha) * 0.1  # Condición de estabilidad
+dt = 0.5 * min(dx**2, dy**2)/(2*alpha)   # Condición de estabilidad
 Nt = int(100/dt)     # Número de pasos de tiempo
 
 # Temperaturas características
@@ -19,9 +19,8 @@ Tf = 0.0    # Temperatura de fusión (°C)
 Tliq = 0.05 # Temperatura de liquidus (°C)
 
 def inicializar_temperatura(Nx, Ny):
-    """Inicializa el campo de temperatura con un gradiente suave."""
-    T = -10 + 10 * np.tanh(np.linspace(-5, 5, Nx))  # Rango ajustable
-    return T.reshape(1, Nx).repeat(Ny, axis=0)
+    """Inicializa el campo de temperatura uniformemente a -10°C."""
+    return -10 * np.ones((Ny, Nx))
 
 def actualizar_temperatura(T, T_old, phi, phi_old, Nt, dt, dx, dy):
     """Actualiza el campo de temperatura y fracción de fase."""
@@ -62,6 +61,8 @@ def main():
     # Inicialización de temperatura y fracción de fase
     T = inicializar_temperatura(Nx, Ny)
     phi = np.zeros((Ny, Nx))  # Fracción de fase (0:hielo, 1:agua)
+    tiempos_interesantes = [0, 10,25, 50,75, 100]  # Tiempos para graficar
+    perfiles_temperatura = {}
 
     # Configuración de la visualización
     plt.ion()  # Modo interactivo
@@ -80,9 +81,10 @@ def main():
     plt.colorbar(im2, ax=ax2)
     ax2.set_title('Fracción de fase (φ)')
     ax2.set_xlabel('x (mm)')
-
+    n=0
+    tiempo_actual = 0
     # Bucle temporal
-    for n in range(Nt):
+    while tiempo_actual <= 100:
         T_old = T.copy()
         phi_old = phi.copy()
 
@@ -94,13 +96,28 @@ def main():
         
         # Actualización de fracción de fase
         phi = actualizar_fraccion_fase(T, phi)
-        
+
+        tiempo_actual = n * dt
+        n += 1
+        if any(abs(tiempo_actual - t) < dt for t in tiempos_interesantes):
+            perfiles_temperatura[round(tiempo_actual)] = T[Ny//2, :].copy()
         # Visualización en tiempo real
         if n % 100 == 0:
             visualizar(T, phi, ax1, ax2, n, dt, im1, im2)
 
     # Desactivar modo interactivo y mostrar plot final
     plt.ioff()
+    plt.show()
+    # Graficar perfiles de temperatura en la línea central
+    plt.figure(figsize=(8, 6))
+    for tiempo, perfil in perfiles_temperatura.items():
+        plt.plot(np.linspace(0, Lx*1000, Nx), perfil, label=f't = {tiempo}s')
+    
+    plt.xlabel('Posición x (mm)')
+    plt.ylabel('Temperatura (°C)')
+    plt.title('Evolución de la temperatura en la línea central')
+    plt.legend()
+    plt.grid()
     plt.show()
 
 # Ejecutar la simulación
